@@ -34,7 +34,7 @@ _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0
 _HEADERS = {"User-Agent": _UA, "Accept-Language": "en-US,en;q=0.9"}
 _REQUEST_TIMEOUT = 8
 _MAX_CONTACT_PAGES = 4
-_MAX_THREADS = 5
+_MAX_THREADS = 2  # FIX: reduced from 5 → 2 to limit concurrent requests on low-RAM VM
 
 
 def _normalize(url: str) -> str:
@@ -143,6 +143,11 @@ def _make_driver() -> webdriver.Chrome:
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-blink-features=AutomationControlled")
     opts.add_argument("--log-level=3")
+    # ── Memory caps (critical on low-RAM VMs) ────────────────────────────────
+    opts.add_argument("--js-flags=--max-old-space-size=256")  # cap JS heap to 256 MB
+    opts.add_argument("--renderer-process-limit=1")            # only one renderer process
+    opts.add_argument("--memory-pressure-off")
+    # ─────────────────────────────────────────────────────────────────────────
     opts.add_argument(f"user-agent={_UA}")
     opts.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
     opts.add_experimental_option("useAutomationExtension", False)
@@ -170,17 +175,20 @@ def _scrape_url_selenium(driver: webdriver.Chrome, url: str) -> Dict:
 
 
 def _run_selenium(base: str, contact_urls: List[str]) -> Dict:
-    driver = _make_driver()
+    # FIX: initialise to None so finally block is always safe
+    driver = None
     emails: Set[str] = set()
     socials: Dict[str, Set[str]] = {k: set() for k in _SOCIAL_RE}
     try:
+        driver = _make_driver()
         for url in [base] + contact_urls[:_MAX_CONTACT_PAGES]:
             result = _scrape_url_selenium(driver, url)
             emails.update(result["emails"])
             for k, v in result["socials"].items():
                 socials[k].update(v)
     finally:
-        driver.quit()
+        if driver is not None:
+            driver.quit()
     return {"emails": emails, "socials": socials}
 
 

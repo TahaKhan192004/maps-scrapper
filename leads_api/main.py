@@ -108,12 +108,20 @@ def get_job(job_id: str):
     if job["result"]:
         result = ScrapeResponse(**job["result"])
 
-    return JobStatusResponse(
+    response = JobStatusResponse(
         job_id=job_id,
         status=job["status"],
         result=result,
         error=job.get("error"),
     )
+
+    # FIX: once the job is finished (done or failed), return the result then
+    # immediately delete it from memory so the dict doesn't grow forever.
+    if job["status"] in ("done", "failed"):
+        del _jobs[job_id]
+        print(f"Job {job_id} completed with status '{job['status']}'. Result stored in response, job entry deleted from memory.")
+
+    return response
 
 
 @app.get("/leads", response_model=List[Lead], summary="List stored leads from Supabase")
