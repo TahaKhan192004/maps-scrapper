@@ -25,6 +25,11 @@ def _build_driver(headless: bool) -> webdriver.Chrome:
     opts.add_argument("--disable-blink-features=AutomationControlled")
     opts.add_argument("--log-level=3")                    # suppress Chrome INFO/WARNING logs
     opts.add_argument("--silent")
+    # ── Memory caps (critical on low-RAM VMs) ────────────────────────────────
+    opts.add_argument("--js-flags=--max-old-space-size=256")  # cap JS heap to 256 MB
+    opts.add_argument("--renderer-process-limit=1")            # only one renderer process
+    opts.add_argument("--memory-pressure-off")
+    # ─────────────────────────────────────────────────────────────────────────
     opts.add_argument(
         "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
@@ -37,10 +42,13 @@ def _build_driver(headless: bool) -> webdriver.Chrome:
         "gcm_channel_status": 0,
     })
 
-    # Redirect ChromeDriver's own stderr to nul (Windows) to kill DevTools line
-    service = ChromeService(log_output=open(os.devnull, "w"))
+    # FIX: open devnull first, then close it after the driver starts to avoid file handle leak
+    _devnull = open(os.devnull, "w")
+    service = ChromeService(log_output=_devnull)
+    driver = webdriver.Chrome(service=service, options=opts)
+    _devnull.close()  # safe to close — ChromeDriver has already started
 
-    return webdriver.Chrome(service=service, options=opts)
+    return driver
 
 
 def _extract_details(driver: webdriver.Chrome, name_fallback: str = "") -> Dict:
@@ -73,7 +81,14 @@ def _extract_details(driver: webdriver.Chrome, name_fallback: str = "") -> Dict:
 def scrape_google_maps(search_query: str, max_leads: int = 10, headless: bool = True) -> List[Dict]:
     logger.info("Maps scrape | query=%s max=%d", search_query, max_leads)
 
-    driver = _build_driver(headless)
+    # FIX: initialise to None so the finally block is always safe
+    driver = None
+    try:
+        driver = _build_driver(headless)
+    except Exception as e:
+        logger.error("Failed to build Chrome driver: %s", e)
+        return []
+
     wait = WebDriverWait(driver, 20)
     captured: List[Dict] = []
 
@@ -152,7 +167,9 @@ def scrape_google_maps(search_query: str, max_leads: int = 10, headless: bool = 
     except Exception as e:
         logger.error("Maps error: %s", e)
     finally:
-        driver.quit()
+        # FIX: guard against driver being None if _build_driver raised
+        if driver is not None:
+            driver.quit()
 
     logger.info("Maps done | captured=%d", len(captured))
     return captured
